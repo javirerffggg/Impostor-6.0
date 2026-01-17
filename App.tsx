@@ -1,0 +1,1919 @@
+
+
+
+
+
+
+
+
+
+
+import React, { useState, useEffect, useRef } from 'react';
+import { Settings, Users, Ghost, Zap, Shuffle, RotateCcw, Monitor, ChevronRight, X, Check, ShieldAlert, Mic, LayoutGrid, CheckCheck, Eye, Lock, Fingerprint, Save, Trash2, Database, Beer, PartyPopper, MessageCircle, AlertTriangle, FileWarning, BarChart3, ScanEye, Flame, Timer, Percent, ShieldCheck, Unlock, FileText, Radio, Droplets, Gavel, Volume2, ChevronDown, ChevronUp, Palette, BookOpen, Network } from 'lucide-react';
+import { Background } from './components/Background';
+import { IdentityCard } from './components/IdentityCard';
+import { PartyNotification } from './components/PartyNotification';
+import { ArchitectCuration } from './components/ArchitectCuration';
+import { DebugConsole } from './components/DebugConsole';
+import { generateGameData, generateArchitectOptions, generateSmartHint } from './utils/gameLogic';
+import { THEMES, DEFAULT_PLAYERS, PLAYER_COLORS } from './constants';
+import { CATEGORIES_DATA } from './categories';
+import { GameState, ThemeName, Player, ThemeConfig, CategoryData } from './types';
+import { getPartyMessage, getBatteryLevel, calculatePartyIntensity } from './utils/partyLogic';
+
+// --- Sub-components extracted to fix Hook Rules violations ---
+
+const ResultsView: React.FC<{
+    gameState: GameState;
+    theme: ThemeConfig;
+    onBack: () => void;
+    onReplay: () => void;
+}> = ({ gameState, theme, onBack, onReplay }) => {
+    const impostors = gameState.gameData.filter(p => p.isImp);
+    const civilWord = gameState.gameData.find(p => !p.isImp)?.realWord || "???";
+    const isTroll = gameState.isTrollEvent;
+    const trollScenario = gameState.trollScenario;
+    const isParty = gameState.settings.partyMode;
+    const architect = gameState.gameData.find(p => p.isArchitect);
+    const oracle = gameState.gameData.find(p => p.isOracle);
+    
+    // --- METRICS CALCULATION (SUSPICION METER) ---
+    const allViewTimes = gameState.gameData.map(p => p.viewTime || 0);
+    const avgViewTime = allViewTimes.reduce((a, b) => a + b, 0) / (allViewTimes.length || 1);
+
+    const getSuspicionTag = (time: number): { label: string, color: string } => {
+        if (time === 0) return { label: "N/A", color: theme.sub };
+        if (time > avgViewTime * 1.5) return { label: "DUDOSO", color: '#fbbf24' }; // Amber
+        if (time < avgViewTime * 0.5) return { label: "PRECIPITADO", color: '#f87171' }; // Red
+        return { label: "NORMAL", color: '#4ade80' }; // Green
+    };
+    
+    // --- REVEAL LOGIC (GLOBAL LOCK) ---
+    const [isDecrypted, setIsDecrypted] = useState(false);
+    const [decryptProgress, setDecryptProgress] = useState(0);
+    const [isHoldingDecrypt, setIsHoldingDecrypt] = useState(false);
+
+    // --- VOCALIS ANIMATION STATE ---
+    const [scannedName, setScannedName] = useState("CALCULANDO...");
+    const [vocalisLocked, setVocalisLocked] = useState(false);
+
+    // --- STOPWATCH STATE ---
+    const [timerSeconds, setTimerSeconds] = useState(0);
+
+    // Timer Logic
+    useEffect(() => {
+        if (isDecrypted) return;
+        const interval = setInterval(() => {
+            setTimerSeconds(s => s + 1);
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [isDecrypted]);
+
+    const formatTime = (totalSeconds: number) => {
+        const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+        const s = (totalSeconds % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+    };
+
+    // Vocalis Effect
+    useEffect(() => {
+        if (isDecrypted) return; // Stop if already revealed
+
+        let interval: number;
+        let counter = 0;
+        const targetName = gameState.startingPlayer || "Nadie";
+        const allNames = gameState.players.map(p => p.name);
+        
+        // Scan phase (1.5s)
+        const scanDuration = 1500;
+        const startTime = Date.now();
+
+        interval = window.setInterval(() => {
+            const elapsed = Date.now() - startTime;
+            
+            if (elapsed < scanDuration) {
+                // Random cycling
+                setScannedName(allNames[Math.floor(Math.random() * allNames.length)]);
+            } else {
+                // Lock on target
+                setScannedName(targetName);
+                setVocalisLocked(true);
+                if (navigator.vibrate) navigator.vibrate([30, 80]); // "Hydraulic brake" feel
+                clearInterval(interval);
+            }
+        }, 60);
+
+        return () => clearInterval(interval);
+    }, [isDecrypted, gameState.startingPlayer, gameState.players]);
+
+    // Haptics & Progress Loop
+    useEffect(() => {
+        let interval: number;
+        if (isHoldingDecrypt && !isDecrypted) {
+            if (navigator.vibrate) navigator.vibrate(30); // Low rumble
+            interval = window.setInterval(() => {
+                setDecryptProgress(prev => {
+                    const next = prev + 2; // Speed of decryption (Slower for dramatic effect)
+                    return next >= 100 ? 100 : next;
+                });
+            }, 16);
+        } else if (!isHoldingDecrypt && !isDecrypted) {
+            setDecryptProgress(prev => Math.max(0, prev - 5)); // Decay if released
+        }
+        return () => clearInterval(interval);
+    }, [isHoldingDecrypt, isDecrypted]);
+
+    // Trigger Unlock
+    useEffect(() => {
+        if (decryptProgress >= 100 && !isDecrypted) {
+            setIsDecrypted(true);
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]); // Success pattern
+        }
+    }, [decryptProgress, isDecrypted]);
+
+    // --- RENDER LOCKED SCREEN (CENSURA TOTAL + VOCALIS + TIMER) ---
+    if (!isDecrypted) {
+        return (
+            <div className="flex flex-col h-full items-center justify-between p-6 pb-12 relative z-10 animate-in fade-in duration-500 pt-[calc(2rem+env(safe-area-inset-top))]">
+                
+                {/* Header & Timer */}
+                <div className="w-full text-center space-y-4">
+                    <div className="flex items-center justify-center gap-2 opacity-70">
+                        <Mic size={16} className="text-red-500 animate-pulse" />
+                        <p style={{ color: theme.sub }} className="text-xs font-black uppercase tracking-[0.3em]">DEBATE EN CURSO</p>
+                    </div>
+                    <div className="relative">
+                        <h1 
+                            className="text-7xl font-black tracking-tighter tabular-nums"
+                            style={{ 
+                                color: theme.text,
+                                textShadow: `0 0 30px ${theme.accent}40`,
+                                fontFamily: "'JetBrains Mono', monospace" 
+                            }}
+                        >
+                            {formatTime(timerSeconds)}
+                        </h1>
+                    </div>
+                </div>
+
+                {/* VOCALIS WIDGET */}
+                <div className="w-full max-w-sm text-center relative z-20 flex-1 flex flex-col justify-center">
+                    <h3 
+                        className="text-xl font-bold uppercase tracking-[0.2em] transition-all duration-300"
+                        style={{ color: theme.text, opacity: 0.9 }}
+                    >
+                        EMPIEZA A HABLAR
+                    </h3>
+                    
+                    <div 
+                        className={`mt-6 text-5xl font-black uppercase tracking-tighter leading-none transition-all duration-300 transform-gpu break-words ${vocalisLocked ? 'scale-110' : 'blur-[2px]'}`}
+                        style={{
+                            color: vocalisLocked ? theme.accent : theme.text,
+                            opacity: vocalisLocked ? 1 : 0.3,
+                            textShadow: vocalisLocked ? `0 0 40px ${theme.accent}` : 'none'
+                        }}
+                    >
+                        {scannedName}
+                    </div>
+
+                    {gameState.settings.partyMode && (
+                        <div className="mt-8 text-center opacity-80 animate-bounce">
+                            <p className="text-[10px] font-bold text-pink-400 uppercase tracking-widest border border-pink-500/30 px-3 py-1 rounded-full inline-block bg-pink-500/10">
+                                Modo Fiesta Activo
+                            </p>
+                        </div>
+                    )}
+                </div>
+
+                {/* ALONGATED BUTTON CONTAINER */}
+                <div className="relative w-full max-w-sm flex flex-col items-center justify-center mb-8">
+                    
+                    {/* EXPANDING AURA BEHIND */}
+                    <div 
+                        className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl transition-all duration-500 ease-out pointer-events-none
+                        ${isHoldingDecrypt ? 'w-[120%] h-48 opacity-50' : 'w-[90%] h-24 opacity-20'}`} 
+                        style={{ backgroundColor: theme.accent }}
+                    />
+
+                    {/* THE ELONGATED BUTTON */}
+                    <button
+                        className="relative w-full h-24 rounded-full overflow-hidden touch-none select-none transition-all duration-200 active:scale-[0.98] group"
+                        style={{ 
+                            boxShadow: isHoldingDecrypt 
+                                ? `0 0 50px ${theme.accent}60, inset 0 0 20px ${theme.accent}20` 
+                                : `0 20px 40px -10px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1)`
+                        }}
+                        onPointerDown={() => setIsHoldingDecrypt(true)}
+                        onPointerUp={() => setIsHoldingDecrypt(false)}
+                        onPointerLeave={() => setIsHoldingDecrypt(false)}
+                        onContextMenu={(e) => e.preventDefault()}
+                    >
+                        {/* 1. Base Glass Layer */}
+                        <div className="absolute inset-0 backdrop-blur-xl bg-black/40 border border-white/10 rounded-full" />
+
+                        {/* 2. Progress Fill (Gradient) */}
+                        <div 
+                            className="absolute top-0 left-0 h-full transition-all duration-75 ease-linear"
+                            style={{ 
+                                width: `${decryptProgress}%`,
+                                background: `linear-gradient(90deg, ${theme.accent}40 0%, ${theme.accent} 100%)`,
+                                boxShadow: `0 0 30px ${theme.accent}`,
+                            }}
+                        />
+
+                        {/* 3. Shimmer (Idle) */}
+                        {!isHoldingDecrypt && (
+                            <div className="absolute inset-0 rounded-full overflow-hidden">
+                                 <div 
+                                    className="absolute inset-0 -translate-x-full animate-[shimmer_2s_infinite]"
+                                    style={{ background: `linear-gradient(90deg, transparent, ${theme.accent}40, transparent)` }} 
+                                />
+                            </div>
+                        )}
+
+                        {/* 4. Content Layout */}
+                        <div className="relative z-10 flex items-center justify-between px-6 w-full h-full">
+                            
+                            {/* Left Icon (Fingerprint) */}
+                            <div 
+                                className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 border ${isHoldingDecrypt ? 'bg-white scale-110 rotate-12 border-transparent' : 'bg-black/20 border-white/10'}`}
+                                style={{ color: isHoldingDecrypt ? theme.accent : theme.text }}
+                            >
+                                <Fingerprint size={28} className={isHoldingDecrypt ? 'animate-pulse' : ''} />
+                            </div>
+
+                            {/* Center Text */}
+                            <div className="flex-1 flex flex-col items-start pl-4">
+                                 <span 
+                                    className="text-sm font-black uppercase tracking-[0.2em] transition-all duration-300"
+                                    style={{ 
+                                        color: '#ffffff',
+                                        textShadow: isHoldingDecrypt ? `0 0 15px ${theme.accent}` : '0 2px 4px rgba(0,0,0,0.5)'
+                                    }}
+                                >
+                                    {isHoldingDecrypt ? (decryptProgress > 90 ? "ACCESO..." : "ANALIZANDO") : "MANTENER"}
+                                </span>
+                                <span 
+                                    className="text-[10px] font-bold uppercase tracking-widest transition-all duration-300"
+                                    style={{ color: isHoldingDecrypt ? 'rgba(255,255,255,0.9)' : theme.sub }}
+                                >
+                                    {isHoldingDecrypt ? `${decryptProgress}% COMPLETADO` : "PARA RESOLVER"}
+                                </span>
+                            </div>
+
+                            {/* Right Icon (Lock/Unlock) */}
+                            <div 
+                                className={`transition-all duration-500 transform ${isHoldingDecrypt ? 'opacity-100 translate-x-0 rotate-0' : 'opacity-30 translate-x-4 -rotate-12'}`}
+                                style={{ color: '#ffffff' }}
+                            >
+                                {decryptProgress > 90 ? <Unlock size={24} /> : <Lock size={24} />}
+                            </div>
+                        </div>
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // --- RENDER DECRYPTED REPORT (INFORME FINAL) ---
+    return (
+        <div className="flex flex-col h-full items-center p-6 pb-24 animate-in slide-in-from-bottom duration-500 relative z-10 pt-[calc(1.5rem+env(safe-area-inset-top))] overflow-y-auto">
+            
+            {/* 1. HEADER: CIVIL WORD */}
+            <div className="w-full max-w-sm mb-8 text-center relative">
+                {/* Glow effect matching theme */}
+                <div 
+                    className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 blur-3xl rounded-full pointer-events-none opacity-20"
+                    style={{ backgroundColor: theme.text }}
+                />
+                
+                <p style={{ color: theme.sub }} className="text-[10px] font-black uppercase tracking-[0.4em] mb-2 flex items-center justify-center gap-2">
+                    <FileText size={10} /> INFORME DE MISIÓN
+                </p>
+                
+                <h1 
+                    className="text-5xl font-black uppercase break-words leading-none tracking-tighter relative z-10"
+                    style={{ 
+                        color: isTroll ? '#ef4444' : theme.text,
+                        textShadow: `0 0 40px ${theme.accent}20`
+                    }}
+                >
+                    {isTroll ? "ERROR" : civilWord}
+                </h1>
+
+                {/* Architect Badge */}
+                {architect && !isTroll && (
+                    <div 
+                        className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full border backdrop-blur-md"
+                        style={{ 
+                            borderColor: '#eab308', 
+                            backgroundColor: 'rgba(234, 179, 8, 0.1)'
+                        }}
+                    >
+                        <ShieldAlert size={10} className="text-yellow-500" />
+                        <span className="text-[9px] font-bold text-yellow-500 uppercase tracking-widest">
+                            Arq: {architect.name}
+                        </span>
+                    </div>
+                )}
+                 {/* Oracle Badge */}
+                 {oracle && !isTroll && (
+                    <div 
+                        className="mt-1 inline-flex items-center gap-2 px-3 py-1 rounded-full border backdrop-blur-md"
+                        style={{ 
+                            borderColor: '#8b5cf6', 
+                            backgroundColor: 'rgba(139, 92, 246, 0.1)'
+                        }}
+                    >
+                        <Eye size={10} className="text-violet-500" />
+                        <span className="text-[9px] font-bold text-violet-500 uppercase tracking-widest">
+                            Oráculo: {oracle.name}
+                        </span>
+                    </div>
+                )}
+            </div>
+
+            {/* 2. THREAT CARD (IMPOSTORS) */}
+            <div className="w-full max-w-sm mb-8">
+                <div 
+                    className="relative overflow-hidden rounded-xl border p-5 backdrop-blur-md"
+                    style={{ 
+                        backgroundColor: theme.cardBg,
+                        borderColor: isTroll ? '#ef4444' : theme.accent,
+                        boxShadow: `0 4px 20px ${isTroll ? '#ef4444' : theme.accent}20`
+                    }}
+                >
+                    {/* Background Strip */}
+                    <div 
+                        className="absolute top-0 left-0 w-1 h-full"
+                        style={{ backgroundColor: isTroll ? '#ef4444' : theme.accent }} 
+                    />
+
+                    <div className="flex items-start justify-between mb-4">
+                        <div>
+                            <p className="text-[10px] uppercase tracking-widest font-bold mb-1 opacity-70" style={{ color: theme.text }}>
+                                {isTroll ? "PROTOCOLO PANDORA" : "AMENAZA IDENTIFICADA"}
+                            </p>
+                            <h3 className="font-black text-lg uppercase tracking-wide" style={{ color: theme.text }}>
+                                {isTroll ? "FALLO DE SISTEMA" : "IMPOSTORES"}
+                            </h3>
+                        </div>
+                        {isTroll ? <AlertTriangle className="text-red-500 animate-pulse" /> : <Ghost style={{ color: theme.text, opacity: 0.8 }} />}
+                    </div>
+
+                    <div className="space-y-2">
+                        {isTroll ? (
+                            <p className="text-xs text-red-500 font-mono font-bold">
+                                {trollScenario === 'espejo_total' && ">> TODOS SON IMPOSTORES"}
+                                {trollScenario === 'civil_solitario' && ">> SOLO 1 CIVIL"}
+                                {trollScenario === 'falsa_alarma' && ">> 0 IMPOSTORES"}
+                            </p>
+                        ) : (
+                            impostors.map(imp => (
+                                <div 
+                                    key={imp.id} 
+                                    className="flex items-center gap-3 p-2 rounded-lg border"
+                                    style={{ 
+                                        backgroundColor: theme.bg,
+                                        borderColor: theme.border
+                                    }}
+                                >
+                                    <div className="w-8 h-8 rounded-full flex items-center justify-center bg-red-500/10 text-red-500">
+                                        <ScanEye size={16} />
+                                    </div>
+                                    <div className="flex-1 flex justify-between items-center">
+                                        <span className="text-lg font-bold tracking-wide" style={{ color: theme.text }}>{imp.name}</span>
+                                        <span className="text-xs font-mono font-bold opacity-60" style={{ color: theme.text }}>
+                                            {Math.round(imp.impostorProbability)}%
+                                        </span>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* 3. PLAYER METRICS LIST */}
+            <div className="w-full max-w-sm space-y-4">
+                <div className="flex items-center gap-2 px-1 opacity-60" style={{ color: theme.text }}>
+                    <BarChart3 size={14} />
+                    <h4 className="text-[10px] font-black uppercase tracking-widest">ANÁLISIS DE COMPORTAMIENTO</h4>
+                </div>
+
+                <div className="grid gap-2">
+                    {gameState.gameData.map((p, idx) => {
+                        const isImp = p.isImp && !isTroll;
+                        const suspicion = getSuspicionTag(p.viewTime);
+                        const isBartender = p.partyRole === 'bartender' && isParty;
+                        
+                        return (
+                            <div 
+                                key={p.id}
+                                className="flex items-center justify-between p-3 rounded-lg border backdrop-blur-sm"
+                                style={{ 
+                                    backgroundColor: theme.cardBg,
+                                    borderColor: theme.border 
+                                }}
+                            >
+                                <div className="flex items-center gap-3">
+                                    <div 
+                                        className="w-1 h-8 rounded-full" 
+                                        style={{ backgroundColor: isImp ? '#ef4444' : PLAYER_COLORS[idx % PLAYER_COLORS.length] }} 
+                                    />
+                                    <div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-bold text-sm" style={{ color: theme.text }}>{p.name}</span>
+                                            {isImp && (
+                                                <>
+                                                    <span className="text-[8px] px-1 rounded bg-red-500/20 text-red-500 font-black">IMP</span>
+                                                    <span className="text-[8px] font-mono opacity-60" style={{ color: theme.sub }}>{Math.round(p.impostorProbability)}%</span>
+                                                </>
+                                            )}
+                                            {p.isArchitect && <span className="text-[8px] px-1 rounded bg-yellow-500/20 text-yellow-600 font-black">ARQ</span>}
+                                            {p.isOracle && <span className="text-[8px] px-1 rounded bg-violet-500/20 text-violet-500 font-black">ORA</span>}
+                                            {isBartender && <Beer size={12} className="text-pink-500"/>}
+                                        </div>
+                                        <div className="flex items-center gap-2 mt-0.5">
+                                            <Timer size={10} style={{ color: theme.sub }} />
+                                            <span className="text-[10px] font-mono" style={{ color: theme.sub }}>{(p.viewTime / 1000).toFixed(1)}s</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="text-right">
+                                    <span 
+                                        className="text-[9px] font-bold uppercase tracking-wide block"
+                                        style={{ color: suspicion.color }}
+                                    >
+                                        {suspicion.label}
+                                    </span>
+                                    {/* Mini bar chart visual */}
+                                    <div className="w-16 h-1 rounded-full mt-1 overflow-hidden ml-auto" style={{ backgroundColor: theme.border }}>
+                                        <div 
+                                            className="h-full rounded-full"
+                                            style={{ 
+                                                width: `${Math.min((p.viewTime / (avgViewTime * 2)) * 100, 100)}%`,
+                                                backgroundColor: suspicion.color 
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+            {/* 4. ACTIONS */}
+            <div className="w-full max-w-sm mt-8 grid grid-cols-2 gap-3">
+                <button 
+                    onClick={onBack}
+                    style={{ borderColor: theme.border, color: theme.text }}
+                    className="py-4 rounded-xl border font-bold uppercase tracking-widest text-xs hover:opacity-70 transition-all"
+                >
+                    Menú Principal
+                </button>
+                <button 
+                    onClick={onReplay}
+                    style={{ backgroundColor: theme.accent, color: '#ffffff' }}
+                    className="py-4 rounded-xl font-black uppercase tracking-widest text-xs shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+                >
+                    <RotateCcw size={16} strokeWidth={3} /> Nueva Misión
+                </button>
+            </div>
+
+            {/* Animations Styles */}
+            <style>{`
+                @keyframes scan {
+                    0% { top: -20%; opacity: 0; }
+                    10% { opacity: 1; }
+                    90% { opacity: 1; }
+                    100% { top: 120%; opacity: 0; }
+                }
+            `}</style>
+        </div>
+    );
+};
+
+
+// --- MAIN APP COMPONENT ---
+
+function App() {
+    // -- State --
+    // Diseño "andaluz" activado por defecto
+    const [themeName, setThemeName] = useState<ThemeName>('illojuan');
+    const theme = THEMES[themeName];
+    const [themesMenuOpen, setThemesMenuOpen] = useState(false);
+    const [howToPlayOpen, setHowToPlayOpen] = useState(false);
+    
+    // -- Initialization with Persistence for INFINITUM VAULT & LEXICON --
+    const [gameState, setGameState] = useState<GameState>(() => {
+        // Default History
+        let loadedHistory = { 
+            roundCounter: 0,
+            lastWords: [],
+            lastCategories: [],
+            globalWordUsage: {},
+            playerStats: {}, // Infinity Vault
+            lastTrollRound: -10,
+            lastArchitectRound: -999,
+            lastStartingPlayers: [],
+            matchLogs: [] // v6.2
+        };
+
+        // Try to recover The Infinity Vault from LocalStorage
+        try {
+            const savedVault = localStorage.getItem('impostor_infinite_vault_v6');
+            if (savedVault) {
+                const parsed = JSON.parse(savedVault);
+                // Validation and Migration for LEXICON structure
+                if (parsed.playerStats) {
+                    loadedHistory = {
+                        ...loadedHistory, // Ensure defaults for new fields
+                        ...parsed,
+                        globalWordUsage: parsed.globalWordUsage || {},
+                        lastCategories: parsed.lastCategories || [],
+                        lastArchitectRound: parsed.lastArchitectRound || -999,
+                        lastStartingPlayers: parsed.lastStartingPlayers || [],
+                        matchLogs: parsed.matchLogs || []
+                    };
+                }
+            }
+        } catch (e) {
+            console.error("Protocol Infinitum: Memory Corrupted. Resetting Vault.", e);
+        }
+
+        return {
+            phase: 'setup',
+            players: DEFAULT_PLAYERS.map((name, i) => ({ id: i.toString(), name })),
+            gameData: [],
+            impostorCount: 1,
+            currentPlayerIndex: 0,
+            startingPlayer: "",
+            isTrollEvent: false,
+            trollScenario: null,
+            isArchitectRound: false,
+            history: loadedHistory,
+            settings: {
+                hintMode: false,
+                trollMode: false,
+                partyMode: false,
+                architectMode: false, // Default to DISABLED
+                oracleMode: false, // Default to DISABLED (v7.0)
+                nexusMode: false, // Default to DISABLED (v6.5)
+                soundEnabled: true, // Default to ENABLED
+                selectedCategories: []
+            },
+            debugState: {
+                isEnabled: false,
+                forceTroll: null,
+                forceArchitect: false
+            },
+            // v4.0 BACCHUS INITIAL STATE
+            partyState: {
+                intensity: 'aperitivo',
+                consecutiveHardcoreRounds: 0,
+                isHydrationLocked: false
+            },
+            currentDrinkingPrompt: "",
+            theme: 'illojuan'
+        };
+    });
+
+    // -- Database State --
+    const [savedPlayers, setSavedPlayers] = useState<string[]>(() => {
+        try {
+            const saved = localStorage.getItem('impostor_saved_players');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            return [];
+        }
+    });
+
+    const [newPlayerName, setNewPlayerName] = useState("");
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [categoriesOpen, setCategoriesOpen] = useState(false);
+    const [hasSeenCurrentCard, setHasSeenCurrentCard] = useState(false);
+    
+    // UI States
+    const [isExiting, setIsExiting] = useState(false); 
+    const [isPixelating, setIsPixelating] = useState(false); 
+    
+    // -- Architect State --
+    const [architectOptions, setArchitectOptions] = useState<[ { categoryName: string, wordPair: CategoryData }, { categoryName: string, wordPair: CategoryData } ] | null>(null);
+    const [architectRegenCount, setArchitectRegenCount] = useState(0);
+
+    // -- Centinela Protocol Activation State --
+    const [debugTapCount, setDebugTapCount] = useState(0);
+    const debugTapTimerRef = useRef<number | null>(null);
+
+    // -- Party Mode Specific State --
+    const [batteryLevel, setBatteryLevel] = useState(100);
+    const promptTimeoutRef = useRef<number | null>(null);
+    const [hydrationTimer, setHydrationTimer] = useState(0); // For countdown
+
+    // -- Audio System Ref --
+    // Lazy load: Object is null until game starts
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    // -- Derived State for Aesthetics --
+    const currentPlayerColor = PLAYER_COLORS[gameState.currentPlayerIndex % PLAYER_COLORS.length];
+
+    // -- Effects --
+
+    // Audio Playback Manager (Sync with Settings)
+    useEffect(() => {
+        // Only react if audio object exists (Game has started at least once)
+        if (audioRef.current) {
+            if (gameState.settings.soundEnabled) {
+                audioRef.current.play().catch(e => console.debug("Audio resume prevented", e));
+            } else {
+                audioRef.current.pause();
+            }
+        }
+    }, [gameState.settings.soundEnabled]);
+
+    // Battery Listener
+    useEffect(() => {
+        const fetchBattery = async () => {
+            const level = await getBatteryLevel();
+            setBatteryLevel(level);
+        };
+        fetchBattery();
+        // Poll battery every minute
+        const interval = setInterval(fetchBattery, 60000);
+        return () => clearInterval(interval);
+    }, []);
+
+    // Save players to local storage
+    useEffect(() => {
+        localStorage.setItem('impostor_saved_players', JSON.stringify(savedPlayers));
+    }, [savedPlayers]);
+
+    // PERSISTENCE: Save The Infinity Vault & Lexicon Data whenever history changes
+    useEffect(() => {
+        localStorage.setItem('impostor_infinite_vault_v6', JSON.stringify(gameState.history));
+    }, [gameState.history]);
+
+    // Helper to set ephemeral party prompt (8 seconds)
+    const triggerPartyMessage = (phase: 'setup' | 'revealing' | 'discussion' | 'results', winState?: 'civil' | 'impostor' | 'troll') => {
+        if (!gameState.settings.partyMode) return;
+        
+        // Clear existing timeout
+        if (promptTimeoutRef.current) {
+            clearTimeout(promptTimeoutRef.current);
+        }
+
+        const msg = getPartyMessage(phase, gameState, batteryLevel, winState);
+        
+        setGameState(prev => ({ ...prev, currentDrinkingPrompt: msg }));
+
+        // Auto-dismiss after 8 seconds
+        promptTimeoutRef.current = window.setTimeout(() => {
+            setGameState(prev => ({ ...prev, currentDrinkingPrompt: "" }));
+        }, 8000);
+    };
+
+    // Periodic Party Prompts for Setup & Discussion
+    useEffect(() => {
+        if (!gameState.settings.partyMode) return;
+
+        const interval = setInterval(() => {
+            // Discussion phase is removed from main flow, but kept in types just in case.
+            // Keeping setup prompt logic.
+            if (gameState.phase === 'setup') {
+                 triggerPartyMessage(gameState.phase);
+                 if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            }
+        }, 120000); // Every 2 minutes
+
+        return () => clearInterval(interval);
+    }, [gameState.settings.partyMode, gameState.phase, batteryLevel, gameState.partyState.intensity]); // Added dependencies
+
+
+    // -- Handlers --
+
+    // PROTOCOL CENTINELA ACTIVATION HANDLER
+    const handleTitleTap = () => {
+        if (gameState.debugState.isEnabled) return; // Already active
+
+        // Clear existing timer to reset count
+        if (debugTapTimerRef.current) clearTimeout(debugTapTimerRef.current);
+
+        setDebugTapCount(prev => {
+            const newCount = prev + 1;
+            if (newCount >= 5) {
+                // ACTIVATE CENTINELA
+                if (navigator.vibrate) navigator.vibrate([100, 50, 50, 50, 200]); // Morse-like pattern
+                setGameState(prev => ({
+                    ...prev,
+                    debugState: { ...prev.debugState, isEnabled: true }
+                }));
+                return 0;
+            }
+            return newCount;
+        });
+
+        // Reset count if no tap within 1 second
+        debugTapTimerRef.current = window.setTimeout(() => {
+            setDebugTapCount(0);
+        }, 800);
+    };
+
+    const startGame = () => {
+        if (gameState.players.length < 3) return;
+
+        // --- LAZY AUDIO LOADING & ERROR HANDLING ---
+        // "Solo se inicia cuando el juego realmente comienza"
+        if (!audioRef.current) {
+            // Use relative path to avoid absolute path issues in some environments
+            audioRef.current = new Audio('background.mp3');
+            audioRef.current.loop = true;
+            audioRef.current.volume = 0.1; // Low volume for ambient loop
+            
+            // Add error listener to catch missing file issues (404)
+            audioRef.current.onerror = (e) => {
+                console.warn("Audio file not found or format not supported. Disabling sound.");
+                // Gracefully disable sound setting without crashing
+                setGameState(prev => ({
+                    ...prev,
+                    settings: { ...prev.settings, soundEnabled: false }
+                }));
+            };
+        }
+        
+        if (gameState.settings.soundEnabled) {
+            audioRef.current.play().catch(e => {
+                // This catch handles Autoplay Policy blocks AND missing files
+                console.log("Audio play failed (Interaction required or File missing)", e);
+            });
+        }
+
+        // Generate data returns the updated history including new drought stats
+        const { players, isTrollEvent, trollScenario, isArchitectTriggered, newHistory, designatedStarter } = generateGameData({
+            players: gameState.players,
+            impostorCount: gameState.impostorCount,
+            useHintMode: gameState.settings.hintMode,
+            useTrollMode: gameState.settings.trollMode,
+            useArchitectMode: gameState.settings.architectMode,
+            useOracleMode: gameState.settings.oracleMode, // v7.0
+            useNexusMode: gameState.settings.nexusMode, // v6.5
+            selectedCats: gameState.settings.selectedCategories,
+            history: gameState.history,
+            // Pass debug overrides if active
+            debugOverrides: gameState.debugState.isEnabled ? {
+                forceTroll: gameState.debugState.forceTroll,
+                forceArchitect: gameState.debugState.forceArchitect
+            } : undefined,
+            isPartyMode: gameState.settings.partyMode // Pass Party Mode flag
+        });
+
+        // Use the Vocalis designated starter
+        const startingPlayer = designatedStarter;
+
+        // RESET DEBUG FORCING FLAGS AFTER CONSUMPTION
+        const cleanDebugState = {
+            ...gameState.debugState,
+            forceTroll: null,
+            forceArchitect: false
+        };
+
+        // --- BACCHUS LOGIC: UPDATE PARTY STATE ---
+        let newPartyState = { ...gameState.partyState };
+        if (gameState.settings.partyMode) {
+            const newIntensity = calculatePartyIntensity(newHistory.roundCounter);
+            let consecutiveHardcore = newPartyState.consecutiveHardcoreRounds;
+            
+            if (newIntensity === 'after_hours') {
+                consecutiveHardcore += 1;
+            } else {
+                consecutiveHardcore = 0; // Reset if intensity drops (e.g. manual reset)
+            }
+
+            // Hydration Lock Check (Every 4 hardcore rounds)
+            if (consecutiveHardcore >= 4) {
+                newPartyState.isHydrationLocked = true;
+                consecutiveHardcore = 0; // Reset counter
+                setHydrationTimer(20); // Start 20s countdown
+            }
+
+            newPartyState = {
+                intensity: newIntensity,
+                consecutiveHardcoreRounds: consecutiveHardcore,
+                isHydrationLocked: newPartyState.isHydrationLocked // Preserve existing lock if any
+            };
+        }
+
+        // -- ARCHITECT FLOW INTERCEPTION --
+        if (isArchitectTriggered) {
+            // Find first civil to be the Architect
+            const firstCivilIndex = players.findIndex(p => !p.isImp);
+            
+            if (firstCivilIndex !== -1) {
+                players[firstCivilIndex].isArchitect = true;
+                
+                // Set Architect as current player (he sees selection screen first)
+                // Generate initial options for curation
+                const initialOptions = generateArchitectOptions(gameState.settings.selectedCategories);
+                setArchitectOptions(initialOptions);
+                setArchitectRegenCount(0);
+
+                setGameState(prev => ({
+                    ...prev,
+                    phase: 'architect',
+                    gameData: players,
+                    isTrollEvent,
+                    trollScenario,
+                    isArchitectRound: true,
+                    currentPlayerIndex: firstCivilIndex, // Architect goes first
+                    startingPlayer,
+                    history: newHistory,
+                    currentDrinkingPrompt: "",
+                    debugState: cleanDebugState,
+                    partyState: newPartyState // Update Party State
+                }));
+                setIsExiting(false);
+                setIsPixelating(false);
+                return; // Stop here, wait for Architect confirmation
+            }
+        }
+
+        // -- STANDARD FLOW --
+        setGameState(prev => ({
+            ...prev,
+            phase: 'revealing',
+            gameData: players,
+            isTrollEvent,
+            trollScenario,
+            isArchitectRound: false,
+            currentPlayerIndex: 0,
+            startingPlayer,
+            history: newHistory, 
+            currentDrinkingPrompt: "",
+            debugState: cleanDebugState,
+            partyState: newPartyState // Update Party State
+        }));
+        setHasSeenCurrentCard(false);
+        setIsExiting(false);
+        setIsPixelating(false);
+    };
+
+    // Handler for Architect Selection
+    const handleArchitectRegenerate = () => {
+        if (architectRegenCount >= 3) return;
+        setArchitectRegenCount(prev => prev + 1);
+        const newOptions = generateArchitectOptions(gameState.settings.selectedCategories);
+        setArchitectOptions(newOptions);
+    };
+
+    const handleArchitectConfirm = (selection: { categoryName: string, wordPair: CategoryData }) => {
+        
+        // Apply selected word to game data
+        const updatedGameData = gameState.gameData.map(p => {
+            // Calculate Hint for Impostor (Hidden from Architect UI)
+            const hint = generateSmartHint(selection.wordPair);
+            let displayWord = selection.wordPair.civ;
+            
+            if (p.isImp) {
+                displayWord = gameState.settings.hintMode ? `PISTA: ${hint}` : "ERES EL IMPOSTOR";
+            }
+
+            return {
+                ...p,
+                word: displayWord,
+                realWord: selection.wordPair.civ,
+                category: selection.categoryName
+            };
+        });
+
+        // Update History to reflect the manually chosen word
+        const updatedHistory = { ...gameState.history };
+        updatedHistory.lastWords = [selection.wordPair.civ, ...updatedHistory.lastWords].slice(0, 15);
+        updatedHistory.lastCategories = [selection.categoryName, ...updatedHistory.lastCategories].slice(0, 3);
+        updatedHistory.globalWordUsage[selection.wordPair.civ] = (updatedHistory.globalWordUsage[selection.wordPair.civ] || 0) + 1;
+
+        // Transition to revealing phase
+        setGameState(prev => ({
+            ...prev,
+            phase: 'revealing',
+            gameData: updatedGameData,
+            history: updatedHistory,
+            // Architect keeps current index, will see their card next
+        }));
+        setHasSeenCurrentCard(false);
+    };
+
+    const handleOracleConfirm = (hint: string) => {
+        // Update Game Data: Set hint for all impostors and mark them as triggered
+        const updatedGameData = gameState.gameData.map(p => {
+            if (p.isImp) {
+                return {
+                    ...p,
+                    word: `PISTA: ${hint}`,
+                    oracleTriggered: true
+                };
+            }
+            return p;
+        });
+
+        setGameState(prev => ({
+            ...prev,
+            gameData: updatedGameData
+        }));
+        
+        // Mark current player (Oracle) as having seen their card
+        setHasSeenCurrentCard(true);
+    };
+
+    const handleNextPlayer = (viewTime: number) => {
+        if (isExiting) return;
+
+        // Save view time for current player
+        setGameState(prev => {
+            const newData = [...prev.gameData];
+            if (newData[prev.currentPlayerIndex]) {
+                newData[prev.currentPlayerIndex].viewTime = viewTime;
+            }
+            return { ...prev, gameData: newData };
+        });
+
+        // Trigger Party Message between turns (Revealing phase)
+        if (gameState.settings.partyMode && gameState.currentPlayerIndex < gameState.players.length - 1) {
+             triggerPartyMessage('revealing');
+        }
+
+        setIsExiting(true);
+
+        setTimeout(() => {
+            if (gameState.currentPlayerIndex < gameState.players.length - 1) {
+                setGameState(prev => ({ ...prev, currentPlayerIndex: prev.currentPlayerIndex + 1 }));
+                setHasSeenCurrentCard(false);
+            } else {
+                // GO TO RESULTS (ResultsView handles the "Discussion/Locked" phase internally)
+                setGameState(prev => ({ 
+                    ...prev, 
+                    phase: 'results',
+                    currentDrinkingPrompt: "" 
+                }));
+                
+                // Trigger discussion prompt if party mode
+                if (gameState.settings.partyMode) {
+                    setTimeout(() => triggerPartyMessage('discussion'), 500);
+                }
+            }
+            setIsExiting(false);
+        }, 300);
+    };
+
+    const handleBackToSetup = () => {
+        setIsPixelating(true);
+        setTimeout(() => {
+            setGameState(prev => ({...prev, phase: 'setup', currentDrinkingPrompt: ""}));
+            setIsPixelating(false);
+        }, 800);
+    };
+
+    const handleReplay = () => {
+        setIsPixelating(true);
+        setTimeout(() => {
+            startGame();
+        }, 800);
+    };
+
+    const addPlayer = (name: string = newPlayerName) => {
+        if (!name.trim()) return;
+        if (gameState.players.some(p => p.name.toLowerCase() === name.trim().toLowerCase())) return;
+
+        const newPlayer: Player = { id: Date.now().toString() + Math.random(), name: name.trim() };
+        setGameState(prev => ({ ...prev, players: [...prev.players, newPlayer] }));
+        if (name === newPlayerName) setNewPlayerName("");
+    };
+
+    const removePlayer = (id: string) => {
+        setGameState(prev => ({ ...prev, players: prev.players.filter(p => p.id !== id) }));
+    };
+
+    // -- Database Handlers --
+    const saveToBank = () => {
+        if (!newPlayerName.trim()) return;
+        const name = newPlayerName.trim();
+        if (!savedPlayers.includes(name)) {
+            setSavedPlayers(prev => [...prev, name]);
+        }
+        setNewPlayerName("");
+    };
+
+    const deleteFromBank = (name: string) => {
+        setSavedPlayers(prev => prev.filter(p => p !== name));
+    };
+
+    const toggleCategory = (cat: string) => {
+        setGameState(prev => {
+            const current = prev.settings.selectedCategories;
+            const updated = current.includes(cat) 
+                ? current.filter(c => c !== cat) 
+                : [...current, cat];
+            return { ...prev, settings: { ...prev.settings, selectedCategories: updated } };
+        });
+    };
+
+    const toggleAllCategories = () => {
+        const allCats = Object.keys(CATEGORIES_DATA);
+        const currentCount = gameState.settings.selectedCategories.length;
+        const allSelected = currentCount === allCats.length;
+
+        setGameState(prev => ({
+            ...prev,
+            settings: {
+                ...prev.settings,
+                selectedCategories: allSelected ? [] : allCats
+            }
+        }));
+    };
+
+    const togglePartyMode = () => {
+        setGameState(prev => {
+            const newPartyMode = !prev.settings.partyMode;
+            if (newPartyMode) {
+                setThemeName('nightclub');
+                // Trigger immediate setup message
+                setTimeout(() => triggerPartyMessage('setup'), 500);
+            } else {
+                setThemeName('illojuan'); 
+                setGameState(p => ({...p, currentDrinkingPrompt: ""}));
+            }
+            return {
+                ...prev,
+                settings: { ...prev.settings, partyMode: newPartyMode }
+            };
+        });
+    };
+
+    // --- HYDRATION LOCK LOGIC ---
+    useEffect(() => {
+        let interval: number;
+        if (gameState.partyState.isHydrationLocked && hydrationTimer > 0) {
+            interval = window.setInterval(() => {
+                setHydrationTimer(prev => prev - 1);
+            }, 1000);
+        } else if (gameState.partyState.isHydrationLocked && hydrationTimer <= 0) {
+            // Unlock is manual via button, timer just enables the button
+        }
+        return () => clearInterval(interval);
+    }, [gameState.partyState.isHydrationLocked, hydrationTimer]);
+
+    const handleHydrationUnlock = () => {
+        setGameState(prev => ({
+            ...prev,
+            partyState: { ...prev.partyState, isHydrationLocked: false }
+        }));
+    };
+
+    // -- Renders --
+
+    const renderHydrationLock = () => (
+        <div className="fixed inset-0 z-[100] bg-[#020617] flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
+            <div className="w-48 h-48 bg-blue-500/10 rounded-full flex items-center justify-center mb-8 relative">
+                <div className="absolute inset-0 bg-blue-500/20 rounded-full animate-ping opacity-20"/>
+                <Droplets size={80} className="text-blue-400 drop-shadow-[0_0_20px_rgba(96,165,250,0.5)] animate-bounce"/>
+            </div>
+            
+            <h2 className="text-3xl font-black text-blue-400 uppercase text-center mb-4 tracking-tighter">
+                Protocolo Hidratación
+            </h2>
+            
+            <p className="text-blue-200/70 text-center text-sm font-bold uppercase tracking-widest max-w-xs mb-12 leading-relaxed">
+                ¡ALTO! Los procesadores biológicos están sobrecalentados. Todo el grupo debe beber un vaso de agua antes de la siguiente fase de infiltración.
+            </p>
+
+            <button 
+                onClick={handleHydrationUnlock}
+                disabled={hydrationTimer > 0}
+                style={{ 
+                    backgroundColor: hydrationTimer > 0 ? '#1e293b' : '#3b82f6',
+                    color: hydrationTimer > 0 ? '#64748b' : 'white'
+                }}
+                className="w-full max-w-xs py-4 rounded-xl font-black uppercase tracking-widest text-sm shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
+            >
+                {hydrationTimer > 0 ? (
+                    <>
+                        <Lock size={16} /> Espere {hydrationTimer}s
+                    </>
+                ) : (
+                    <>
+                        <Check size={20} strokeWidth={3} /> Sistemas Refrigerados
+                    </>
+                )}
+            </button>
+        </div>
+    );
+
+    const renderSetup = () => {
+        const isValidToStart = gameState.players.length >= 3;
+        const isParty = gameState.settings.partyMode;
+
+        // If Hydration Lock is active, show overlay instead of setup
+        if (gameState.partyState.isHydrationLocked) {
+            return renderHydrationLock();
+        }
+
+        return (
+            <div className={`flex flex-col h-full relative z-10 animate-in fade-in duration-500 pt-[env(safe-area-inset-top)] ${isPixelating ? 'animate-dissolve' : ''}`}>
+                 
+                 {/* PROTOCOL CENTINELA: DEBUG CONSOLE */}
+                 <DebugConsole gameState={gameState} setGameState={setGameState} />
+                 
+                 {/* AMBER FLASH EFFECT WHEN DEBUG ACTIVE */}
+                 {gameState.debugState.isEnabled && (
+                     <div className="fixed inset-0 pointer-events-none z-[60] border-4 border-amber-500/50 animate-pulse" />
+                 )}
+
+                 {/* PARTY NOTIFICATION OVERLAY */}
+                 {isParty && gameState.currentDrinkingPrompt && (
+                    <div className="absolute top-20 left-0 right-0 z-50 flex justify-center px-4 pointer-events-none">
+                         <PartyNotification 
+                            key={gameState.currentDrinkingPrompt} // Re-mounts to trigger animation
+                            prompt={gameState.currentDrinkingPrompt} 
+                            theme={theme} 
+                        />
+                    </div>
+                )}
+
+                <div className="flex-1 overflow-y-auto px-6 pb-48 space-y-6">
+                    <header className="pt-6 text-center space-y-2 mb-2">
+                        {/* TAP TRIGGER AREA */}
+                        <h1 
+                            onClick={handleTitleTap}
+                            style={{ color: theme.text, fontFamily: theme.font }} 
+                            className="text-5xl font-black italic tracking-tighter select-none cursor-default active:opacity-80 transition-opacity"
+                        >
+                            IMPOSTOR
+                        </h1>
+                        {isParty && <p style={{ color: theme.accent }} className="text-xs font-black uppercase tracking-[0.3em] animate-pulse">DRINKING EDITION</p>}
+                    </header>
+
+                    {/* Players Section */}
+                    <div 
+                        style={{ 
+                            backgroundColor: theme.cardBg, 
+                            borderColor: theme.border, 
+                            borderRadius: theme.radius,
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                        }} 
+                        className="p-5 border backdrop-blur-md"
+                    >
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 style={{ color: theme.sub }} className="text-xs font-black uppercase tracking-widest">Jugadores ({gameState.players.length})</h3>
+                            <Users size={16} color={theme.accent} />
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-2 mb-4"> 
+                            {gameState.players.map(p => (
+                                <div key={p.id} style={{ backgroundColor: theme.border }} className="flex justify-between items-center p-3 rounded-lg animate-in slide-in-from-left duration-300">
+                                    <span style={{ color: theme.text }} className="font-bold truncate text-sm mr-2">{p.name}</span>
+                                    <button onClick={() => removePlayer(p.id)} style={{ color: theme.sub }} className="hover:text-red-500 transition-colors shrink-0">
+                                        <X size={14} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-2 mb-4">
+                            <input 
+                                value={newPlayerName}
+                                onChange={(e) => setNewPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
+                                placeholder="Nuevo Jugador..."
+                                className="flex-1 min-w-0 rounded-lg px-4 py-3 outline-none text-sm font-bold border border-transparent focus:border-white/30 transition-colors placeholder:text-inherit placeholder:opacity-40"
+                                style={{ backgroundColor: theme.border, color: theme.text }}
+                            />
+                            <button 
+                                onClick={saveToBank}
+                                style={{ backgroundColor: theme.border, color: theme.sub }}
+                                className="w-12 rounded-lg font-bold hover:bg-white/10 active:scale-90 transition-transform flex items-center justify-center shrink-0"
+                                title="Guardar en banco"
+                            >
+                                <Save size={20} />
+                            </button>
+                            <button 
+                                onClick={() => addPlayer()}
+                                style={{ backgroundColor: theme.accent }}
+                                className="w-12 rounded-lg text-white font-bold active:scale-90 transition-transform shadow-lg flex items-center justify-center shrink-0"
+                            >
+                                <Check size={24} />
+                            </button>
+                        </div>
+
+                        {savedPlayers.length > 0 && (
+                             <div className="mt-6 pt-4 border-t border-white/5">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <Database size={12} color={theme.sub}/>
+                                    <h4 style={{ color: theme.sub }} className="text-[10px] font-black uppercase tracking-widest">Banco de Agentes</h4>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {savedPlayers.map((name, idx) => {
+                                        const isInGame = gameState.players.some(p => p.name === name);
+                                        return (
+                                            <div 
+                                                key={idx}
+                                                style={{ 
+                                                    backgroundColor: isInGame ? theme.accent : theme.border,
+                                                    opacity: isInGame ? 0.5 : 1,
+                                                    borderColor: theme.border
+                                                }}
+                                                className="pl-3 pr-1 py-1.5 rounded-full border flex items-center gap-2 transition-all"
+                                            >
+                                                <button 
+                                                    onClick={() => !isInGame && addPlayer(name)}
+                                                    disabled={isInGame}
+                                                    style={{ color: isInGame ? 'white' : theme.text }}
+                                                    className="text-xs font-bold disabled:cursor-not-allowed"
+                                                >
+                                                    {name}
+                                                </button>
+                                                <button 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        deleteFromBank(name);
+                                                    }}
+                                                    className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/10"
+                                                    style={{ color: theme.sub }}
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                             </div>
+                        )}
+                    </div>
+
+                    <div 
+                        style={{ 
+                            backgroundColor: theme.cardBg, 
+                            borderColor: theme.border, 
+                            borderRadius: theme.radius,
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                        }} 
+                        className="p-5 border backdrop-blur-md"
+                    >
+                        {/* Impostor Count */}
+                        <div className="flex items-center justify-between mb-6">
+                            <div>
+                                <p style={{ color: theme.sub }} className="text-xs font-black uppercase tracking-widest">Impostores</p>
+                            </div>
+                            <div style={{ backgroundColor: theme.border }} className="flex items-center gap-4 rounded-lg p-1">
+                                <button 
+                                    onClick={() => setGameState(prev => ({...prev, impostorCount: Math.max(1, prev.impostorCount - 1)}))}
+                                    style={{ color: theme.text }}
+                                    className="w-8 h-8 flex items-center justify-center font-bold hover:opacity-70 active:scale-75 transition-transform rounded"
+                                >-</button>
+                                <span style={{ color: theme.text }} className="font-bold w-4 text-center">{gameState.impostorCount}</span>
+                                <button 
+                                    onClick={() => setGameState(prev => ({...prev, impostorCount: Math.min(gameState.players.length - 1, prev.impostorCount + 1)}))}
+                                    style={{ color: theme.text }}
+                                    className="w-8 h-8 flex items-center justify-center font-bold hover:opacity-70 active:scale-75 transition-transform rounded"
+                                >+</button>
+                            </div>
+                        </div>
+
+                        {/* Toggles Grid */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-white/5">
+                            <button 
+                                onClick={() => setGameState(prev => ({...prev, settings: {...prev.settings, hintMode: !prev.settings.hintMode}}))}
+                                style={{ 
+                                    backgroundColor: gameState.settings.hintMode ? `${theme.accent}20` : 'transparent',
+                                    borderColor: gameState.settings.hintMode ? theme.accent : theme.border
+                                }}
+                                className="flex flex-col items-center justify-center p-3 rounded-xl border transition-all active:scale-95 hover:bg-white/5 gap-3"
+                            >
+                                <div className="flex flex-col items-center gap-1">
+                                    <ScanEye size={18} style={{ color: theme.text, opacity: gameState.settings.hintMode ? 1 : 0.5 }} />
+                                    <span style={{ color: theme.text }} className="text-[9px] font-black uppercase tracking-widest">Pistas</span>
+                                </div>
+                                <div 
+                                    style={{ backgroundColor: gameState.settings.hintMode ? theme.accent : theme.border }}
+                                    className="w-8 h-4 rounded-full relative transition-colors"
+                                >
+                                    <div className={`w-2.5 h-2.5 bg-white shadow-sm rounded-full absolute top-0.5 transition-all ${gameState.settings.hintMode ? 'left-5' : 'left-0.5'}`} />
+                                </div>
+                            </button>
+
+                            <button 
+                                onClick={() => setGameState(prev => ({...prev, settings: {...prev.settings, trollMode: !prev.settings.trollMode}}))}
+                                style={{ 
+                                    backgroundColor: gameState.settings.trollMode ? `${theme.accent}20` : 'transparent',
+                                    borderColor: gameState.settings.trollMode ? theme.accent : theme.border
+                                }}
+                                className="flex flex-col items-center justify-center p-3 rounded-xl border transition-all active:scale-95 hover:bg-white/5 gap-3"
+                            >
+                                <div className="flex flex-col items-center gap-1">
+                                    <Ghost size={18} style={{ color: theme.text, opacity: gameState.settings.trollMode ? 1 : 0.5 }} />
+                                    <span style={{ color: theme.text }} className="text-[9px] font-black uppercase tracking-widest">Troll</span>
+                                </div>
+                                <div 
+                                    style={{ backgroundColor: gameState.settings.trollMode ? theme.accent : theme.border }}
+                                    className="w-8 h-4 rounded-full relative transition-colors"
+                                >
+                                    <div className={`w-2.5 h-2.5 bg-white shadow-sm rounded-full absolute top-0.5 transition-all ${gameState.settings.trollMode ? 'left-5' : 'left-0.5'}`} />
+                                </div>
+                            </button>
+
+                            <button 
+                                onClick={() => setGameState(prev => ({...prev, settings: {...prev.settings, architectMode: !prev.settings.architectMode}}))}
+                                style={{ 
+                                    backgroundColor: gameState.settings.architectMode ? `${theme.accent}20` : 'transparent',
+                                    borderColor: gameState.settings.architectMode ? theme.accent : theme.border
+                                }}
+                                className="flex flex-col items-center justify-center p-3 rounded-xl border transition-all active:scale-95 hover:bg-white/5 gap-3"
+                            >
+                                <div className="flex flex-col items-center gap-1">
+                                    <ShieldCheck size={18} style={{ color: theme.text, opacity: gameState.settings.architectMode ? 1 : 0.5 }} />
+                                    <span style={{ color: theme.text }} className="text-[9px] font-black uppercase tracking-widest">Arq.</span>
+                                </div>
+                                <div 
+                                    style={{ backgroundColor: gameState.settings.architectMode ? theme.accent : theme.border }}
+                                    className="w-8 h-4 rounded-full relative transition-colors"
+                                >
+                                    <div className={`w-2.5 h-2.5 bg-white shadow-sm rounded-full absolute top-0.5 transition-all ${gameState.settings.architectMode ? 'left-5' : 'left-0.5'}`} />
+                                </div>
+                            </button>
+                            
+                            <button 
+                                onClick={() => setGameState(prev => ({...prev, settings: {...prev.settings, nexusMode: !prev.settings.nexusMode}}))}
+                                style={{ 
+                                    backgroundColor: gameState.settings.nexusMode ? `${theme.accent}20` : 'transparent',
+                                    borderColor: gameState.settings.nexusMode ? theme.accent : theme.border
+                                }}
+                                className="flex flex-col items-center justify-center p-3 rounded-xl border transition-all active:scale-95 hover:bg-white/5 gap-3"
+                            >
+                                <div className="flex flex-col items-center gap-1">
+                                    <Network size={18} style={{ color: theme.text, opacity: gameState.settings.nexusMode ? 1 : 0.5 }} />
+                                    <span style={{ color: theme.text }} className="text-[9px] font-black uppercase tracking-widest">Nexus</span>
+                                </div>
+                                <div 
+                                    style={{ backgroundColor: gameState.settings.nexusMode ? theme.accent : theme.border }}
+                                    className="w-8 h-4 rounded-full relative transition-colors"
+                                >
+                                    <div className={`w-2.5 h-2.5 bg-white shadow-sm rounded-full absolute top-0.5 transition-all ${gameState.settings.nexusMode ? 'left-5' : 'left-0.5'}`} />
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div className="flex w-full gap-3">
+                        <button 
+                            onClick={() => setCategoriesOpen(true)}
+                            style={{ 
+                                borderColor: theme.border, 
+                                color: theme.text, 
+                                backgroundColor: theme.cardBg, 
+                                borderRadius: theme.radius,
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                            }}
+                            className="flex-1 py-4 border flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest hover:opacity-80 active:scale-95 transition-all backdrop-blur-md transform-gpu"
+                        >
+                            <LayoutGrid size={16} /> Categorías
+                        </button>
+
+                        <button 
+                            onClick={() => setSettingsOpen(true)}
+                            style={{ 
+                                borderColor: theme.border, 
+                                color: theme.sub,
+                                backgroundColor: theme.border,
+                                borderRadius: theme.radius,
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                            }}
+                            className="flex-1 py-4 border flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest hover:opacity-80 active:scale-95 transition-all backdrop-blur-md transform-gpu"
+                        >
+                            <Settings size={16} /> Ajustes
+                        </button>
+                    </div>
+                </div>
+
+                <div className="fixed bottom-0 left-0 w-full p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] z-20 pointer-events-none flex justify-center items-center">
+                    <div className="relative w-full max-w-xs group">
+                        {isValidToStart && (
+                            <div
+                                className="absolute inset-1 rounded-full opacity-50 blur-xl"
+                                style={{
+                                    backgroundColor: theme.accent,
+                                    animation: 'aura-pulse 2s ease-in-out infinite'
+                                }}
+                            />
+                        )}
+
+                        <button 
+                            onClick={startGame}
+                            disabled={!isValidToStart}
+                            style={{ 
+                                backgroundColor: !isValidToStart ? 'gray' : theme.accent,
+                                boxShadow: '0 0 0 1px rgba(255,255,255,0.1)'
+                            }}
+                            className="w-full py-3.5 relative z-10 text-white font-black text-base active:scale-90 transition-all duration-100 flex items-center justify-center gap-3 pointer-events-auto rounded-full overflow-hidden transform-gpu"
+                        >
+                            {isValidToStart && (
+                                <div className="absolute inset-0 -translate-x-full animate-[shimmer_2s_infinite]" 
+                                     style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)' }} 
+                                />
+                            )}
+                            
+                            <span className="relative z-10 flex items-center gap-3">
+                                {isParty ? "COMENZAR EL BOTELLÓN" : "EMPEZAR PARTIDA"} <ChevronRight strokeWidth={4} size={20} />
+                            </span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const renderReveal = () => {
+        const cardColor = currentPlayerColor;
+        const isLastPlayer = gameState.currentPlayerIndex === gameState.players.length - 1;
+        const isParty = gameState.settings.partyMode;
+        
+        // Oracle Handlers
+        const currentPlayer = gameState.gameData[gameState.currentPlayerIndex];
+        const showOracleInterface = currentPlayer.isOracle && !hasSeenCurrentCard;
+
+        const auraExplosion = isExiting && (
+            <div className="fixed inset-0 z-0 flex items-center justify-center pointer-events-none">
+                <div 
+                    style={{
+                        backgroundColor: cardColor,
+                        animation: 'aura-expand 0.6s ease-out forwards',
+                    }}
+                    className="w-64 h-64 rounded-full blur-3xl opacity-80"
+                />
+            </div>
+        );
+
+        return (
+            <div className="flex flex-col h-full items-center justify-center p-6 pt-[calc(1.5rem+env(safe-area-inset-top))] pb-[calc(1.5rem+env(safe-area-inset-bottom))] relative z-10">
+                {auraExplosion}
+                
+                {/* PARTY NOTIFICATION OVERLAY */}
+                {isParty && gameState.currentDrinkingPrompt && (
+                    <div className="absolute top-20 left-0 right-0 z-50 flex justify-center px-4 pointer-events-none">
+                         <PartyNotification 
+                            key={gameState.currentDrinkingPrompt}
+                            prompt={gameState.currentDrinkingPrompt} 
+                            theme={theme} 
+                        />
+                    </div>
+                )}
+
+                <div 
+                    key={gameState.currentPlayerIndex} 
+                    className={`w-full max-w-sm flex flex-col items-center ${isExiting ? 'card-exit' : 'card-enter'}`}
+                >
+                    <IdentityCard 
+                        player={currentPlayer}
+                        theme={theme}
+                        color={cardColor}
+                        onRevealStart={() => {}}
+                        onRevealEnd={() => {
+                            // If Oracle, don't mark as seen until selection is made
+                            if (!currentPlayer.isOracle) setHasSeenCurrentCard(true);
+                        }}
+                        nextAction={handleNextPlayer}
+                        readyForNext={hasSeenCurrentCard}
+                        isLastPlayer={isLastPlayer}
+                        isParty={gameState.settings.partyMode}
+                        partyIntensity={gameState.partyState.intensity} 
+                        debugMode={gameState.debugState.isEnabled}
+                        // Oracle specific
+                        onOracleConfirm={handleOracleConfirm}
+                    />
+                </div>
+                
+                <div className="mt-auto mb-4 text-center opacity-50 space-y-2 shrink-0">
+                     <p style={{ color: theme.sub }} className="text-[10px] uppercase tracking-widest">
+                        Jugador {gameState.currentPlayerIndex + 1} de {gameState.players.length}
+                    </p>
+                    <div className="flex gap-2 justify-center items-center h-4">
+                        {gameState.players.map((_, i) => {
+                            const isActive = i === gameState.currentPlayerIndex;
+                            const isPast = i < gameState.currentPlayerIndex;
+                            return (
+                                <div 
+                                    key={i} 
+                                    style={{ 
+                                        backgroundColor: isActive || isPast
+                                            ? PLAYER_COLORS[i % PLAYER_COLORS.length] 
+                                            : 'rgba(255,255,255,0.2)',
+                                        animation: isActive ? 'echo-pulse 2s cubic-bezier(0, 0, 0.2, 1) infinite' : 'none',
+                                        boxShadow: isActive ? `0 0 10px ${PLAYER_COLORS[i % PLAYER_COLORS.length]}` : 'none'
+                                    }}
+                                    className={`rounded-full transition-all duration-500 ${isActive ? 'w-3 h-3' : 'w-1.5 h-1.5'}`}
+                                />
+                            );
+                        })}
+                    </div>
+                </div>
+                <style>{`
+                    .card-enter { animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+                    .card-exit { animation: slideOutLeft 0.3s cubic-bezier(0.7, 0, 0.84, 0) forwards; }
+                    @keyframes slideInRight {
+                        from { opacity: 0; transform: translateX(100px) scale(0.95) rotate(2deg); filter: blur(4px); }
+                        to { opacity: 1; transform: translateX(0) scale(1) rotate(0deg); filter: blur(0); }
+                    }
+                    @keyframes slideOutLeft {
+                        from { opacity: 1; transform: translateX(0) scale(1) rotate(0deg); filter: blur(0); }
+                        to { opacity: 0; transform: translateX(-100px) scale(0.95) rotate(-2deg); filter: blur(4px); }
+                    }
+                    @keyframes aura-expand {
+                        0% { transform: scale(0.5); opacity: 0; }
+                        30% { opacity: 0.6; }
+                        100% { transform: scale(20); opacity: 0; }
+                    }
+                `}</style>
+            </div>
+        );
+    };
+
+    const renderHowToPlay = () => (
+        <div className={`fixed inset-0 z-[60] transform transition-transform duration-300 ${howToPlayOpen ? 'translate-y-0' : 'translate-y-full'}`}>
+            <div style={{ backgroundColor: theme.bg }} className="absolute inset-0 flex flex-col">
+                <div className="p-6 pt-[calc(1.5rem+env(safe-area-inset-top))] flex items-center justify-between border-b border-white/10 shrink-0 bg-inherit z-10">
+                    <h2 style={{ color: theme.text }} className="text-2xl font-black italic">Cómo Jugar</h2>
+                    <button style={{ color: theme.text }} onClick={() => setHowToPlayOpen(false)}><X /></button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 pb-32 space-y-8">
+                    {/* ROLES */}
+                    <section className="space-y-4">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Users size={20} style={{ color: theme.accent }} />
+                            <h3 style={{ color: theme.accent }} className="text-lg font-black uppercase tracking-widest">Roles</h3>
+                        </div>
+                        
+                        <div className="p-4 rounded-xl border border-white/10 bg-white/5 space-y-2">
+                            <h4 className="font-bold text-white flex items-center gap-2"><ShieldCheck size={16} className="text-green-500"/> Civil</h4>
+                            <p style={{ color: theme.sub }} className="text-xs leading-relaxed">
+                                Tu misión es identificar al Impostor. Todos los civiles comparten la misma palabra secreta. Debes describir tu palabra sutilmente para que otros civiles sepan que eres de los suyos, pero sin que sea tan obvio que el Impostor la adivine.
+                            </p>
+                        </div>
+
+                        <div className="p-4 rounded-xl border border-white/10 bg-white/5 space-y-2">
+                            <h4 className="font-bold text-white flex items-center gap-2"><Ghost size={16} className="text-red-500"/> Impostor</h4>
+                            <p style={{ color: theme.sub }} className="text-xs leading-relaxed">
+                                No conoces la palabra secreta (o recibes una pista vaga). Tu misión es pasar desapercibido, escuchar a los demás para deducir la palabra y votar como uno más para evitar ser descubierto.
+                            </p>
+                        </div>
+
+                        <div className="p-4 rounded-xl border border-white/10 bg-white/5 space-y-2">
+                            <h4 className="font-bold text-white flex items-center gap-2"><Eye size={16} className="text-violet-500"/> Oráculo (Civil Especial)</h4>
+                            <p style={{ color: theme.sub }} className="text-xs leading-relaxed">
+                                Solo aparece si el modo "Pistas" está activo. El Oráculo ve la palabra y elige qué pista verán los impostores. Los impostores saben que su pista ha sido elegida por el Oráculo.
+                            </p>
+                        </div>
+                    </section>
+
+                    {/* MODOS */}
+                    <section className="space-y-4">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Settings size={20} style={{ color: theme.accent }} />
+                            <h3 style={{ color: theme.accent }} className="text-lg font-black uppercase tracking-widest">Modos de Juego</h3>
+                        </div>
+
+                         <div className="p-4 rounded-xl border border-white/10 bg-white/5 space-y-2">
+                            <h4 className="font-bold text-white flex items-center gap-2"><Beer size={16} className="text-pink-500"/> Modo Fiesta</h4>
+                            <p style={{ color: theme.sub }} className="text-xs leading-relaxed">
+                                Transforma el juego en un drinking game. Introduce roles como el 'Bartender' (que manda beber) y eventos aleatorios basados en el nivel de intensidad de la fiesta.
+                            </p>
+                        </div>
+
+                        <div className="p-4 rounded-xl border border-white/10 bg-white/5 space-y-2">
+                            <h4 className="font-bold text-white flex items-center gap-2"><ScanEye size={16} className="text-cyan-500"/> Pistas</h4>
+                            <p style={{ color: theme.sub }} className="text-xs leading-relaxed">
+                                Ayuda a los impostores dándoles una palabra relacionada o una categoría en lugar de decirles explícitamente que son impostores. Hace el juego más difícil para los civiles.
+                            </p>
+                        </div>
+
+                        <div className="p-4 rounded-xl border border-white/10 bg-white/5 space-y-2">
+                            <h4 className="font-bold text-white flex items-center gap-2"><AlertTriangle size={16} className="text-orange-500"/> Modo Troll</h4>
+                            <p style={{ color: theme.sub }} className="text-xs leading-relaxed">
+                                El sistema puede fallar intencionadamente. Puede que todos sean impostores, que solo haya un civil, o que no haya impostores. ¡Nadie está a salvo!
+                            </p>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    );
+
+    const renderDrawer = () => (
+        <div className={`fixed inset-0 z-50 transform transition-transform duration-300 ${settingsOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSettingsOpen(false)} />
+            <div style={{ backgroundColor: theme.bg }} className="absolute right-0 h-full w-80 shadow-2xl p-6 pt-[calc(1.5rem+env(safe-area-inset-top))] pb-[calc(1.5rem+env(safe-area-inset-bottom))] overflow-y-auto flex flex-col border-l border-white/10">
+                <div className="flex justify-between items-center mb-8">
+                    <h2 style={{ color: theme.text }} className="text-2xl font-black italic">Ajustes</h2>
+                    <button style={{ color: theme.text }} onClick={() => setSettingsOpen(false)}><X /></button>
+                </div>
+
+                {/* How to Play Button */}
+                <div className="mb-6">
+                    <button 
+                        onClick={() => setHowToPlayOpen(true)}
+                        style={{ 
+                            borderColor: theme.border, 
+                            color: theme.text,
+                            backgroundColor: theme.cardBg
+                        }}
+                        className="w-full py-4 border rounded-xl font-bold uppercase tracking-widest text-xs flex items-center justify-center gap-2 hover:bg-white/5 active:scale-95 transition-all"
+                    >
+                        <BookOpen size={16} /> Manual de Juego
+                    </button>
+                </div>
+
+                <div className="mb-4 p-4 rounded-xl border border-dashed border-pink-500/50 bg-pink-500/10">
+                     <div className="flex items-center justify-between">
+                         <div className="space-y-1">
+                            <p className="text-sm font-black text-pink-400 flex items-center gap-2">
+                                MODO FIESTA <Beer size={14}/>
+                            </p>
+                            <p className="text-[10px] text-pink-300/70">Protocolo BACCHUS v4.0</p>
+                        </div>
+                         <button 
+                            onClick={togglePartyMode}
+                            style={{ backgroundColor: gameState.settings.partyMode ? '#ec4899' : 'rgba(255,255,255,0.1)' }}
+                            className="w-12 h-6 rounded-full relative transition-colors active:scale-90 transform-gpu"
+                        >
+                            <div className={`w-4 h-4 bg-white shadow-md rounded-full absolute top-1 transition-all ${gameState.settings.partyMode ? 'left-7' : 'left-1'}`} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* ORACLE MODE TOGGLE (v7.0) */}
+                <div className="mb-4 p-4 rounded-xl border border-white/10 bg-white/5">
+                     <div className="flex items-center justify-between">
+                         <div className="space-y-1">
+                            <p style={{ color: theme.text }} className="text-sm font-bold flex items-center gap-2">
+                                Protocolo Oráculo <Eye size={14} className={gameState.settings.hintMode ? "text-violet-500" : "text-gray-500"}/>
+                            </p>
+                            <p style={{ color: theme.sub }} className="text-[10px]">
+                                {gameState.settings.hintMode 
+                                    ? "Civil elige pista para impostor" 
+                                    : "Requiere activar Modo Pistas"}
+                            </p>
+                        </div>
+                         <button 
+                            disabled={!gameState.settings.hintMode}
+                            onClick={() => setGameState(prev => ({...prev, settings: {...prev.settings, oracleMode: !prev.settings.oracleMode}}))}
+                            style={{ 
+                                backgroundColor: gameState.settings.oracleMode && gameState.settings.hintMode ? '#8b5cf6' : 'rgba(255,255,255,0.1)',
+                                opacity: gameState.settings.hintMode ? 1 : 0.5,
+                                cursor: gameState.settings.hintMode ? 'pointer' : 'not-allowed'
+                            }}
+                            className="w-12 h-6 rounded-full relative transition-colors active:scale-90 transform-gpu"
+                        >
+                            <div className={`w-4 h-4 bg-white shadow-md rounded-full absolute top-1 transition-all ${gameState.settings.oracleMode && gameState.settings.hintMode ? 'left-7' : 'left-1'}`} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* AUDIO TOGGLE */}
+                <div className="mb-8 p-4 rounded-xl border border-white/10 bg-white/5">
+                     <div className="flex items-center justify-between">
+                         <div className="space-y-1">
+                            <p style={{ color: theme.text }} className="text-sm font-bold flex items-center gap-2">
+                                Ambiente <Volume2 size={14}/>
+                            </p>
+                            <p style={{ color: theme.sub }} className="text-[10px]">Sonido de fondo en bucle</p>
+                        </div>
+                         <button 
+                            onClick={() => setGameState(prev => ({...prev, settings: {...prev.settings, soundEnabled: !prev.settings.soundEnabled}}))}
+                            style={{ backgroundColor: gameState.settings.soundEnabled ? theme.accent : 'rgba(255,255,255,0.1)' }}
+                            className="w-12 h-6 rounded-full relative transition-colors active:scale-90 transform-gpu"
+                        >
+                            <div className={`w-4 h-4 bg-white shadow-md rounded-full absolute top-1 transition-all ${gameState.settings.soundEnabled ? 'left-7' : 'left-1'}`} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Visual Interface Dropdown */}
+                <div className="flex-1">
+                    <button 
+                        onClick={() => setThemesMenuOpen(!themesMenuOpen)}
+                        className="w-full flex justify-between items-center py-4 border-b border-white/10 mb-4 group"
+                    >
+                        <div className="flex items-center gap-2">
+                            <Palette size={16} style={{ color: theme.sub }} />
+                            <h3 style={{ color: theme.sub }} className="text-xs font-black uppercase tracking-widest group-hover:text-white transition-colors">Interfaz Visual</h3>
+                        </div>
+                        {themesMenuOpen ? <ChevronUp size={16} color={theme.sub}/> : <ChevronDown size={16} color={theme.sub}/>}
+                    </button>
+                    
+                    {themesMenuOpen && (
+                        <div className="grid grid-cols-2 gap-3 mb-8 animate-in slide-in-from-top-2 duration-200">
+                            {(Object.keys(THEMES) as ThemeName[]).map(t => (
+                                <button 
+                                    key={t}
+                                    onClick={() => {
+                                        setThemeName(t);
+                                    }}
+                                    style={{ 
+                                        backgroundColor: themeName === t ? THEMES[t].accent : THEMES[t].border,
+                                        borderColor: THEMES[t].accent 
+                                    }}
+                                    className={`p-3 rounded border text-xs font-bold text-left transition-all ${themeName === t ? 'text-white' : 'border-transparent'}`}
+                                >
+                                    <span style={{ color: themeName === t ? 'white' : theme.text }}>{THEMES[t].name}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Back to Home Button added inside Drawer for Navigation consistency */}
+                <div className="mt-4">
+                     <button 
+                        onClick={() => {
+                            setSettingsOpen(false);
+                            handleBackToSetup();
+                        }}
+                        style={{ 
+                            borderColor: theme.border, 
+                            color: theme.sub 
+                        }}
+                        className="w-full py-3 border rounded-lg font-bold uppercase tracking-widest text-xs hover:bg-white/5 active:scale-95 transition-all"
+                    >
+                        Volver al Inicio
+                    </button>
+                </div>
+
+                <div className="mt-auto pt-6 border-t border-white/10 text-center">
+                    <p style={{ color: theme.sub }} className="text-[10px] font-mono opacity-50">v7.0 ORACLE EDITION</p>
+                </div>
+            </div>
+        </div>
+    );
+
+    const renderCategories = () => {
+        const allCats = Object.keys(CATEGORIES_DATA);
+        const selected = gameState.settings.selectedCategories;
+        const isNoneSelected = selected.length === 0;
+
+        return (
+            <div className={`fixed inset-0 z-50 transform transition-transform duration-300 ${categoriesOpen ? 'translate-y-0' : 'translate-y-full'}`}>
+                <div style={{ backgroundColor: theme.bg }} className="absolute inset-0 flex flex-col">
+                    <div className="p-6 pt-[calc(1.5rem+env(safe-area-inset-top))] flex items-center justify-between border-b border-white/10 shrink-0 bg-inherit z-10">
+                        <h2 style={{ color: theme.text }} className="text-2xl font-black italic">Categorías</h2>
+                        <button style={{ color: theme.text }} onClick={() => setCategoriesOpen(false)}><X /></button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-6">
+                        <div className="mb-6">
+                             <button 
+                                onClick={toggleAllCategories}
+                                style={{ 
+                                    borderColor: theme.accent, 
+                                    color: theme.accent,
+                                    backgroundColor: theme.cardBg 
+                                }}
+                                className="w-full py-4 border rounded-xl font-bold uppercase tracking-widest text-xs flex items-center justify-center gap-2 backdrop-blur-md transition-all active:scale-95 transform-gpu"
+                            >
+                                <CheckCheck size={16} />
+                                {selected.length === allCats.length ? 'Resetear (Todas Activas)' : 'Seleccionar Todo'}
+                            </button>
+                            <p 
+                                style={{ color: theme.sub }} 
+                                className={`text-center text-[10px] mt-2 font-bold uppercase tracking-widest transition-opacity duration-300 ${isNoneSelected ? 'opacity-70' : 'opacity-0'}`}
+                            >
+                                Todas las categorías están activas por defecto
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 pb-32">
+                            {allCats.map(cat => {
+                                const isActive = selected.includes(cat);
+                                return (
+                                    <button
+                                        key={cat}
+                                        onClick={() => toggleCategory(cat)}
+                                        style={{ 
+                                            backgroundColor: isActive ? theme.accent : 'transparent',
+                                            borderColor: isActive ? theme.accent : theme.border,
+                                            color: isActive ? '#fff' : theme.text,
+                                            boxShadow: isActive ? `0 4px 12px ${theme.accent}40` : 'none'
+                                        }}
+                                        className="relative group w-full h-24 p-1 rounded-xl border font-bold flex flex-col items-center justify-center text-center transition-all active:scale-95 backdrop-blur-sm transform-gpu overflow-hidden"
+                                    >
+                                        {isActive && (
+                                            <div className="absolute top-1.5 right-1.5 animate-in fade-in zoom-in duration-200">
+                                                <Check size={12} strokeWidth={4} />
+                                            </div>
+                                        )}
+                                        <span className="w-full px-0.5 opacity-90 text-[9px] uppercase tracking-wide leading-tight break-words hyphens-auto">
+                                            {cat}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <div 
+            style={{ backgroundColor: theme.bg, color: theme.text }} 
+            className="w-full h-full relative overflow-hidden transition-colors duration-700"
+        >
+            <Background 
+                theme={theme} 
+                phase={gameState.phase} 
+                isTroll={gameState.isTrollEvent} 
+                activeColor={currentPlayerColor} 
+                isParty={gameState.settings.partyMode}
+            />
+            
+            {gameState.phase === 'setup' && renderSetup()}
+            
+            {/* ARCHITECT CURATION PHASE */}
+            {gameState.phase === 'architect' && architectOptions && (
+                <ArchitectCuration 
+                    architect={gameState.gameData[gameState.currentPlayerIndex]}
+                    currentOptions={architectOptions}
+                    onRegenerate={handleArchitectRegenerate}
+                    onConfirm={handleArchitectConfirm}
+                    regenCount={architectRegenCount}
+                    theme={theme}
+                />
+            )}
+
+            {gameState.phase === 'revealing' && renderReveal()}
+            
+            {/* RESULTS PHASE which now handles the "Discussion/Starts Speaking" locked state internally */}
+            {gameState.phase === 'results' && (
+                <ResultsView 
+                    gameState={gameState} 
+                    theme={theme} 
+                    onBack={handleBackToSetup} 
+                    onReplay={handleReplay} 
+                />
+            )}
+            
+            {renderDrawer()}
+            {renderCategories()}
+            {renderHowToPlay()}
+            
+            {/* Global Keyframes for new effects */}
+            <style>{`
+                @keyframes particle-flow {
+                    0% { background-position: 0 0; }
+                    100% { background-position: 20px 20px; }
+                }
+                @keyframes echo-pulse {
+                    0% { box-shadow: 0 0 0 0px currentColor; opacity: 1; transform: scale(1.2); }
+                    70% { box-shadow: 0 0 0 10px transparent; opacity: 1; transform: scale(1); }
+                    100% { box-shadow: 0 0 0 0 transparent; opacity: 1; transform: scale(1); }
+                }
+                @keyframes heartbeat {
+                    0% { transform: scale(1); text-shadow: 0 0 0 transparent; }
+                    15% { transform: scale(1.1); text-shadow: 0 0 20px currentColor; }
+                    30% { transform: scale(1); text-shadow: 0 0 10px currentColor; }
+                    45% { transform: scale(1.1); text-shadow: 0 0 20px currentColor; }
+                    60% { transform: scale(1); text-shadow: 0 0 0 transparent; }
+                }
+                @keyframes dissolve {
+                    0% { filter: blur(0px) brightness(1); opacity: 1; transform: scale(1); }
+                    50% { filter: blur(4px) brightness(1.5); opacity: 0.8; transform: scale(1.02); }
+                    100% { filter: blur(20px) brightness(5); opacity: 0; transform: scale(1.1); }
+                }
+                .animate-dissolve {
+                    animation: dissolve 0.8s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+                }
+                
+                @keyframes aura-spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                @keyframes aura-pulse {
+                    0%, 100% { transform: scale(0.95); opacity: 0.5; }
+                    50% { transform: scale(1.05); opacity: 0.8; }
+                }
+                @keyframes shimmer {
+                    100% { transform: translateX(100%); }
+                }
+                @keyframes scan {
+                    0% { top: -100%; }
+                    100% { top: 200%; }
+                }
+                @keyframes scan_1s_infinite_linear {
+                    0% { top: 0%; }
+                    100% { top: 100%; }
+                }
+            `}</style>
+        </div>
+    );
+}
+
+export default App;
